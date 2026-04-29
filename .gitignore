@@ -1,0 +1,16 @@
+# External cloned repositories (each has its own .git history)
+.external/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
