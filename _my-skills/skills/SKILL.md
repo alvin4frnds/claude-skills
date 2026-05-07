@@ -9,7 +9,7 @@ This skill is invoked **explicitly** by the user. Its job is to (1) find the bes
 
 ## Catalog location
 
-`C:/Users/Praveen/Desktop/Code/Learning/awesome-claude-skills`
+`/Users/praveen/Desktop/code/learning/claude-skills`
 
 Each subdirectory that is a skill contains a `SKILL.md` whose YAML frontmatter has `name:` and `description:` fields.
 
@@ -31,7 +31,7 @@ If the user invoked the skill with **no task prompt** (empty args), ask them onc
 Run this Bash command to pull frontmatter from every skill in one call:
 
 ```bash
-for f in C:/Users/Praveen/Desktop/Code/Learning/awesome-claude-skills/*/SKILL.md; do
+for f in /Users/praveen/Desktop/code/learning/claude-skills/*/SKILL.md; do
   echo "=== $f ==="
   head -10 "$f"
 done
@@ -39,7 +39,7 @@ done
 
 If the catalog directory is missing, tell the user the expected path and stop.
 
-If you suspect skills nested one level deeper (e.g. plugin bundles), also check `awesome-claude-skills/*/*/SKILL.md` with a follow-up glob.
+If you suspect skills nested one level deeper (e.g. plugin bundles), also check `/Users/praveen/Desktop/code/learning/claude-skills/*/*/SKILL.md` with a follow-up glob.
 
 ### 3. Rank by semantic relevance
 
