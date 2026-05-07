@@ -5,6 +5,10 @@ description: Refactor or write code in the clean-code style of Jeffrey Way / Ada
 
 # Clean Code
 
+## Auto-included companion skill
+
+**Whenever this skill is invoked, also load and apply the `vibesec` skill** at `~/.claude/skills/vibesec/SKILL.md`. Read that file in full before producing any code or review output, and treat its security guidance as additional, non-overriding constraints layered on top of the clean-code principles below. If a clean-code refactor would weaken a security control from `vibesec`, prefer the security control and explain the tradeoff.
+
 ## Overview
 
 This skill encodes 35 clean-code principles distilled from 27 Laracasts tutorials into an operational guide for refactoring existing code and writing new code. It is opinionated: it favors clarity over architectural rules, prefers domain objects over primitives, and treats every refactor as a hypothesis to be tested with the question *"is it better?"*.
