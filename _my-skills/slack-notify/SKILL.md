@@ -94,9 +94,10 @@ With remote control on (URL detected from JSONL):
 ```
 🔔 <notification text>
 
-💬 Reply: <remote-control-url>
-   (tap on phone → opens Claude app · click on desktop → opens claude.ai/code)
+<remote-control-url>
 ```
+
+**Critical:** put the URL on its own line, with NO trailing characters and a blank line after. Do not append parenthetical helper text on the next line — Slack's link parser greedily extends URLs into adjacent characters and the resulting deep-link breaks ("untitled session, loading messages" stuck). Don't use markdown link syntax `[label](url)` either; the bare URL is the most reliable shape across Slack desktop, Slack mobile, and the iOS/Android Claude app universal-link handoff.
 
 Without remote control:
 
