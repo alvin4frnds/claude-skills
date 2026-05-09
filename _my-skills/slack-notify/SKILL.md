@@ -1,6 +1,6 @@
 ---
 name: slack-notify
-description: Notify the user on BOTH Slack and Anthropic's mobile push, with the active Remote Control session URL appended so they can click through and command the same local session back. Triggers on "notify me on slack", "slack me", "ping me on slack", "let me know via slack", "notify me when". AUTO-DETECTS Remote Control state by reading the bridge_status event in the session JSONL — never asks the user. The same URL works as a desktop browser link AND a mobile app universal link (assume Claude app installed). Uses the slack MCP server's conversations_add_message tool for the Slack post; mobile push fires automatically when Remote Control is active. If RC is off, posts Slack-only and surfaces a loud terminal action block telling the user how to flip the toggle.
+description: Notify the user on BOTH Slack and Anthropic's mobile push, with the active Remote Control session URL appended so they can click through and command the same local session back. Triggers on "notify me on slack", "slack me", "ping me on slack", "let me know via slack", "notify me when". AUTO-DETECTS Remote Control state by reading the bridge_status event in the session JSONL — never asks the user. The same URL works as a desktop browser link AND a mobile app universal link (assume Claude app installed). Appends a pipe-separated status trailer (branch | path | plan) on a new line after the URL, mirroring the user's terminal status line. Uses the slack MCP server's conversations_add_message tool for the Slack post; mobile push fires automatically when Remote Control is active. If RC is off, posts Slack-only and surfaces a loud terminal action block telling the user how to flip the toggle.
 ---
 
 # slack-notify — push a notification to Slack + Anthropic mobile, with remote-control deep-link
@@ -95,17 +95,29 @@ With remote control on (URL detected from JSONL):
 🔔 <notification text>
 
 <remote-control-url>
-```
 
-**Critical:** put the URL on its own line, with NO trailing characters and a blank line after. Do not append parenthetical helper text on the next line — Slack's link parser greedily extends URLs into adjacent characters and the resulting deep-link breaks ("untitled session, loading messages" stuck). Don't use markdown link syntax `[label](url)` either; the bare URL is the most reliable shape across Slack desktop, Slack mobile, and the iOS/Android Claude app universal-link handoff.
+<branch> | <last-3-dirs> | <plan>
+```
 
 Without remote control:
 
 ```
 🔔 <notification text>
 
+<branch> | <last-3-dirs> | <plan>
+
 _(local session — reply by returning to the terminal)_
 ```
+
+**Critical for the URL line:** put the URL on its own line, with NO trailing characters and a blank line after. Do not append parenthetical helper text on the next line — Slack's link parser greedily extends URLs into adjacent characters and the resulting deep-link breaks ("untitled session, loading messages" stuck). Don't use markdown link syntax `[label](url)` either; the bare URL is the most reliable shape across Slack desktop, Slack mobile, and the iOS/Android Claude app universal-link handoff.
+
+**Status trailer (the third line):** mirrors the user's terminal status line. Three fields, pipe-separated, pulled from the same sources as `statusline-command.sh`:
+
+- **`<branch>`** — `git --no-optional-locks branch --show-current` run from the session's cwd. Falls back to `no-branch` if not inside a repo.
+- **`<last-3-dirs>`** — last 3 path components of cwd, slash-joined (e.g. `Code/Learning/awesome-claude-skills`).
+- **`<plan>`** — output of `python C:\Users\Praveen\.claude\claude_usage.py` (Windows) or whatever path the user's `claude_usage.py` is at on other OSes. Format is typically `plan: 86% | resets in 1h 11m`. If the script fails or is missing, fall back to `plan: ?`.
+
+The context-window field is intentionally omitted from Slack — it's only meaningful in the live terminal where the harness injects token counts. Don't fake it.
 
 Use 🔔 as the lead emoji to make notifications visually distinct from other Slack messages. If the message is good news (tests passed, deploy succeeded), swap to ✅. If it's blocking (waiting on the user, error needing decision), use ⚠️.
 
