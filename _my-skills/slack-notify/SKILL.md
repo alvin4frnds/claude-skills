@@ -21,7 +21,13 @@ The user must already have:
    - Claude mobile app installed (iOS or Android), signed in to the same Anthropic account as the CLI
    - `Push when Claude decides` enabled via `/config` in Claude Code
 
-   If the user hasn't set these up, the Slack post still goes out — mobile push just won't fire. Mention the missing setup in your terminal confirmation so the user can fix it next time.
+   **Tip — make Remote Control default-on so you never have to remember the flag:**
+
+   The user typically launches Claude Code via a shell alias (`cl`, `clc`, etc.). The cleanest setup is:
+   - **Add `--remote-control` to that alias** — e.g., `alias cl='claude --remote-control'` (bash/zsh) or `Set-Alias cl 'claude --remote-control'` won't work for arg-passing on Windows, so use a function: `function cl { claude --remote-control @args }` (PowerShell). Every session then starts RC-enabled.
+   - **Or** run `/config` once and toggle **Enable Remote Control for all sessions** to `true` — same effect, no alias edits.
+
+   If the user hasn't done either, the Slack post still goes out — mobile push just won't fire, and the message will use the "local session" fallback. **When this happens, surface the action block defined in step 6 every invocation** so the user is consistently reminded of the one-toggle fix.
 
 If the slack tool isn't available, tell the user it isn't loaded and stop. Do not silently no-op.
 
@@ -49,6 +55,8 @@ Ask the user once, in one short sentence: "What's the remote-control URL/session
 
 **Case C — Remote control is off.**
 Don't ask, don't make one up. Post the message but append a one-line note: `_(local session — to reply, come back to your terminal or run `/remote-control` to enable web/mobile access)_`.
+
+**Then, in the terminal, surface a clear action block to the user — every time, not just once per session.** This is the central reason the user adopted this skill: they want to be told, plainly, every invocation, that they could be getting more (mobile push + clickable reply URL) by flipping a toggle. Don't bury it as a "tip"; make it a labeled `⚠️` block. See step 6 for the exact format.
 
 You cannot detect remote-control state programmatically — there's no env var. Trust what the user has told you. If they haven't said either way, ask once: "Is remote control enabled for this session?" and remember the answer.
 
@@ -110,7 +118,21 @@ Output one short line per channel that fired:
 - `✓ Slack: posted to @<bot>`
 - `✓ Mobile push: triggered (Remote Control active)` *or* `– Mobile push: skipped (no Remote Control)`
 
-If the user hasn't set up mobile push prerequisites (e.g., never enabled `/config` push, no mobile app), add a one-time hint: `Tip: enable "Push when Claude decides" in /config to also get mobile pings.` Don't repeat the hint every invocation — once per session is enough.
+**If Remote Control is OFF for this session**, append the following block to your terminal output — **every invocation, not throttled, not buried as a tip**. The user explicitly wants to be told, plainly, each time, that one toggle would unlock the second channel:
+
+```
+⚠️  Remote Control is off — you're getting Slack only.
+
+To also get mobile push and a clickable reply URL in the message, flip ONE of these:
+  1. Mid-session: type  /remote-control     (enables for this session only)
+  2. Persistent:  /config → toggle "Enable Remote Control for all sessions" → true
+  3. Alias:       add --remote-control to your `cl` shell function
+                  (PS profile: function cl { claude --dangerously-skip-permissions --chrome --remote-control })
+```
+
+The choice of three is intentional: option 1 is for *right now*, option 2 is the no-friction default-on, option 3 is for users who relaunch from a shell alias. Show all three; let the user pick.
+
+If the user hasn't set up the *mobile push prerequisites* either (no app installed, `/config` push disabled), add a second one-time-per-session hint underneath: `Note: mobile push also needs the Claude mobile app installed and "Push when Claude decides" enabled in /config.`
 
 ## Edge cases
 
