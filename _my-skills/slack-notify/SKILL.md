@@ -1,6 +1,6 @@
 ---
 name: slack-notify
-description: Notify the user on BOTH Slack and Anthropic's mobile push, with the active Remote Control session URL appended so they can click through and command the same local session back. Triggers on "notify me on slack", "slack me", "ping me on slack", "let me know via slack", "notify me when". Uses the slack MCP server's conversations_add_message tool for the Slack post; mobile push fires automatically when Remote Control is active (Anthropic's classifier picks up the explicit "this is a user notification moment" framing). If remote-control is off, posts to Slack only with a note that the session is local-only.
+description: Notify the user on BOTH Slack and Anthropic's mobile push, with the active Remote Control session URL appended so they can click through and command the same local session back. Triggers on "notify me on slack", "slack me", "ping me on slack", "let me know via slack", "notify me when". AUTO-DETECTS Remote Control state by reading the bridge_status event in the session JSONL — never asks the user. The same URL works as a desktop browser link AND a mobile app universal link (assume Claude app installed). Uses the slack MCP server's conversations_add_message tool for the Slack post; mobile push fires automatically when Remote Control is active. If RC is off, posts Slack-only and surfaces a loud terminal action block telling the user how to flip the toggle.
 ---
 
 # slack-notify — push a notification to Slack + Anthropic mobile, with remote-control deep-link
@@ -15,19 +15,15 @@ The user must already have:
 
 1. **The slack MCP server installed and connected** — exposes `mcp__slack__conversations_add_message` and `mcp__slack__channels_list`. Verify the tools are available before trying to post.
 2. **A self-DM channel** with the bot — typically `@<bot_username>` (e.g. `@claude_mcp_praveen` for the Crackle workspace).
-3. **For mobile push to also fire** (recommended, but skill still works without):
-   - Claude Code v2.1.110+
-   - Remote Control active in the current session (`claude --remote-control` or `/remote-control`)
-   - Claude mobile app installed (iOS or Android), signed in to the same Anthropic account as the CLI
-   - `Push when Claude decides` enabled via `/config` in Claude Code
+3. **Remote Control active** — required for mobile push and the clickable reply URL. Skill auto-detects state per step 2; if off, falls back to Slack-only and surfaces the `⚠️` action block (step 6) every invocation.
+   - The Claude mobile app is **assumed installed and signed in** to the same Anthropic account as the CLI; do not surface "install the app" hints.
+   - `Push when Claude decides` should be enabled via `/config` for mobile push to actually fire (this is checked once: if the user reports never receiving mobile pushes despite RC being on, suggest checking `/config`).
 
    **Tip — make Remote Control default-on so you never have to remember the flag:**
 
    The user typically launches Claude Code via a shell alias (`cl`, `clc`, etc.). The cleanest setup is:
-   - **Add `--remote-control` to that alias** — e.g., `alias cl='claude --remote-control'` (bash/zsh) or `Set-Alias cl 'claude --remote-control'` won't work for arg-passing on Windows, so use a function: `function cl { claude --remote-control @args }` (PowerShell). Every session then starts RC-enabled.
+   - **Add `--remote-control` to that alias** — e.g., `alias cl='claude --remote-control'` (bash/zsh) or, on Windows PowerShell, a function: `function cl { claude --remote-control @args }`. Every session then starts RC-enabled.
    - **Or** run `/config` once and toggle **Enable Remote Control for all sessions** to `true` — same effect, no alias edits.
-
-   If the user hasn't done either, the Slack post still goes out — mobile push just won't fire, and the message will use the "local session" fallback. **When this happens, surface the action block defined in step 6 every invocation** so the user is consistently reminded of the one-toggle fix.
 
 If the slack tool isn't available, tell the user it isn't loaded and stop. Do not silently no-op.
 
@@ -43,22 +39,45 @@ Start from what the user asked you to convey. Examples:
 
 Keep it tight. One paragraph max. The user is on their phone or in another window — they're scanning, not reading.
 
-### 2. Detect / collect the remote-control session URL
+### 2. Auto-detect Remote Control state and URL — never ask the user
 
-Three cases:
+Do not ask. Detect it programmatically every invocation. The harness writes a `system / bridge_status` event into the session JSONL when `/remote-control` (or `--remote-control`) is enabled.
 
-**Case A — Remote control is on AND the user has shared the URL with you this session.**
-Use the stored URL. (You'll have stored it earlier; see step 3.)
+**Procedure** (use Bash or PowerShell — pick whichever is available):
 
-**Case B — Remote control is on but URL is unknown.**
-Ask the user once, in one short sentence: "What's the remote-control URL/session name? (paste from the terminal output where you ran `/remote-control`)". Store the answer for the rest of the session — every subsequent slack-notify reuses it without re-asking.
+1. Read the current session ID from the env var:
+   ```powershell
+   $sid = $env:CLAUDE_CODE_SESSION_ID
+   ```
+   ```bash
+   sid="$CLAUDE_CODE_SESSION_ID"
+   ```
+   If unset, fall back to "RC unknown" — proceed to Case OFF below.
 
-**Case C — Remote control is off.**
-Don't ask, don't make one up. Post the message but append a one-line note: `_(local session — to reply, come back to your terminal or run `/remote-control` to enable web/mobile access)_`.
+2. Locate the JSONL — the harness writes it to `~/.claude/projects/<project-slug>/<session-id>.jsonl`. The slug encoding is harness-specific, so just glob across all project dirs:
+   ```powershell
+   $jsonl = Get-ChildItem "$env:USERPROFILE\.claude\projects\*\$sid.jsonl" -ErrorAction SilentlyContinue | Select-Object -First 1
+   ```
+   ```bash
+   jsonl=$(ls ~/.claude/projects/*/"$sid".jsonl 2>/dev/null | head -1)
+   ```
 
-**Then, in the terminal, surface a clear action block to the user — every time, not just once per session.** This is the central reason the user adopted this skill: they want to be told, plainly, every invocation, that they could be getting more (mobile push + clickable reply URL) by flipping a toggle. Don't bury it as a "tip"; make it a labeled `⚠️` block. See step 6 for the exact format.
+3. Find the **most recent** `bridge_status` event and extract the URL. Use Grep on the JSONL with the pattern `"subtype":"bridge_status"`. Read the last matching line. The line is a JSON object with `"content"` and `"url"` fields — for example:
+   ```json
+   {"type":"system","subtype":"bridge_status","content":"/remote-control is active. Code in CLI or at https://claude.ai/code/session_01AgjnbPSQQ6m9RbuJx76R3P","url":"https://claude.ai/code/session_01AgjnbPSQQ6m9RbuJx76R3P",...}
+   ```
+   - If `content` contains `is active`, RC is ON. Use the `url` field for the deep link.
+   - If `content` indicates RC has been turned off, or there's no `bridge_status` event at all, RC is OFF.
 
-You cannot detect remote-control state programmatically — there's no env var. Trust what the user has told you. If they haven't said either way, ask once: "Is remote control enabled for this session?" and remember the answer.
+4. Branch:
+   - **RC ON** → use the URL in the Slack message and let the mobile-push framing fire. Skip the `⚠️` action block.
+   - **RC OFF** → omit the URL, append the local-session footer to the Slack message, and surface the `⚠️` action block in the terminal (per step 6).
+
+The same URL (`https://claude.ai/code/session_<id>`) works as both:
+- A web link in a desktop browser → opens claude.ai/code
+- A universal/app link on iOS or Android → opens directly in the Claude app (assume the user has it installed)
+
+So one URL is enough. No separate `claude://` scheme needed.
 
 ### 3. Post via the Slack MCP tool
 
@@ -70,20 +89,13 @@ Call `mcp__slack__conversations_add_message`:
 
 ### 4. Message format
 
-With remote control URL:
+With remote control on (URL detected from JSONL):
 
 ```
 🔔 <notification text>
 
 💬 Reply: <remote-control-url>
-```
-
-With session name only (no deep link):
-
-```
-🔔 <notification text>
-
-💬 Reply: open https://claude.ai/code and pick session "<name>"
+   (tap on phone → opens Claude app · click on desktop → opens claude.ai/code)
 ```
 
 Without remote control:
@@ -132,13 +144,13 @@ To also get mobile push and a clickable reply URL in the message, flip ONE of th
 
 The choice of three is intentional: option 1 is for *right now*, option 2 is the no-friction default-on, option 3 is for users who relaunch from a shell alias. Show all three; let the user pick.
 
-If the user hasn't set up the *mobile push prerequisites* either (no app installed, `/config` push disabled), add a second one-time-per-session hint underneath: `Note: mobile push also needs the Claude mobile app installed and "Push when Claude decides" enabled in /config.`
+(Mobile app is assumed installed — don't bother the user about that. If they ever say mobile push isn't firing despite RC being on, suggest enabling `Push when Claude decides` in `/config` once.)
 
 ## Edge cases
 
 - **Multiple Slack workspaces.** If the user has more than one Slack MCP server connected (rare), ask which workspace before posting.
 - **User asks for a channel post instead of DM.** Default is DM (push to *you*). If the user explicitly says "post in #channel", honor it — but warn that the bot needs to be `/invite`d to that channel first, or the post will fail with `not_in_channel`.
-- **URL changes mid-session.** If the user runs `/remote-control` again or the URL rotates, they'll usually paste the new one. Replace the stored URL when given a new one without asking.
+- **URL changes mid-session.** If the user toggles `/remote-control` again or the URL rotates, the JSONL gets a fresh `bridge_status` event. Always read the *most recent* one — never cache the URL across invocations.
 - **Notification spam risk.** This skill is invoked explicitly. Don't post unsolicited Slack messages just because Claude finished a turn — that's the job of mobile push or hooks, not this skill.
 
 ## Why this skill exists (design intent)
