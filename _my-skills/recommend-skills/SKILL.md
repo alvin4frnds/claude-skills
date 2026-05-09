@@ -1,9 +1,9 @@
 ---
-name: skills
-description: Explicitly invoked meta-skill. When the user runs `/skills <task prompt>` (or otherwise tells you to use the skills meta-skill), match that task against the local awesome-claude-skills catalog, let the user pick skill(s) via AskUserQuestion, then handle the original task using the selected skill(s) — in the same turn, without asking the user to retype the prompt.
+name: recommend-skills
+description: Explicitly invoked meta-skill. When the user runs `/recommend-skills <task prompt>` (or otherwise tells you to use the recommend-skills meta-skill), match that task against the local awesome-claude-skills catalog, let the user pick skill(s) via AskUserQuestion, then handle the original task using the selected skill(s) — in the same turn, without asking the user to retype the prompt.
 ---
 
-# skills — meta-skill
+# recommend-skills — meta-skill
 
 This skill is invoked **explicitly** by the user. Its job is to (1) find the best skill(s) from a local catalog for the user's current task, (2) let the user pick which to apply, and (3) carry out the user's original task using the chosen skill(s) — all in one turn.
 
@@ -21,7 +21,7 @@ Follow these steps in order. Do not skip steps. Do not ask the user to re-state 
 
 The "task prompt" is whatever the user wrote alongside the invocation. Example:
 
-- User typed: `/skills draft a tailored resume for a staff engineer role at Stripe`
+- User typed: `/recommend-skills draft a tailored resume for a staff engineer role at Stripe`
 - Task prompt = `draft a tailored resume for a staff engineer role at Stripe`
 
 If the user invoked the skill with **no task prompt** (empty args), ask them once: "What task should I match against the skills catalog?" — then proceed.
