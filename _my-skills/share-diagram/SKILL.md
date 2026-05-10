@@ -24,13 +24,14 @@ If the user says "send me the diagram on slack so I can see it on my phone", tha
 
 1. **Slack MCP server installed and connected** — exposes `mcp__slack__conversations_add_message`. Same as `slack-notify`.
 
-2. **Dropbox API token** — Required for the upload step. Read in this order:
-   - Env var `DROPBOX_TOKEN` (preferred — set in shell or harness env)
-   - File `~/.dropbox-token` (single-line, just the token string)
-   
-   If neither is found, do not silently fall back to ASCII or any third-party host. Stop and tell the user: *"No Dropbox token found. Put your token in `~/.dropbox-token` or set `DROPBOX_TOKEN` in your environment."* Optionally surface the create-token instructions: `https://www.dropbox.com/developers/apps` → your app → Settings → Generated access token.
+2. **Dropbox API token** — Required for the upload step. Mint via the refresh-token helper:
+   - Run `~/.dropbox-token-fresh.sh` → prints a fresh `sl.u.…` access token to stdout. Cached in `~/.dropbox-token-cache.json` for ~4h, auto-refreshed via OAuth `refresh_token` grant when expired.
+   - Helper reads credentials (refresh_token + client_id + client_secret) from `~/.dropbox-refresh.json` (chmod 600).
+   - Fallbacks (legacy): env var `DROPBOX_TOKEN`, then file `~/.dropbox-token` (static token).
 
-   The token format is `sl.u.…` (Dropbox short-lived OAuth tokens). They expire after ~4 hours by default unless the app is configured for long-lived. If a Dropbox API call returns `invalid_access_token`, tell the user the token expired and link them to the regenerate page.
+   If neither helper nor fallback works, do not silently fall back to ASCII or a third-party host. Stop and tell the user. To bootstrap from scratch, walk them through OAuth: `https://www.dropbox.com/oauth2/authorize?client_id=<APP_KEY>&token_access_type=offline&response_type=code` → exchange the returned code at `https://api.dropbox.com/oauth2/token` (`grant_type=authorization_code`) → store the `refresh_token` + key + secret in `~/.dropbox-refresh.json`.
+
+   Usage in the pipeline: `TOKEN="$(~/.dropbox-token-fresh.sh)"` — never embed a raw token.
 
 3. **ImageMagick installed** — needed to convert SVG → PNG. On Windows, the binary is at `C:\Program Files\ImageMagick-*-Q16-HDRI\magick.exe`. On macOS/Linux it's typically just `magick` on PATH.
    - Detect at the start of the procedure (try `magick --version` or look up the install path on Windows).
@@ -67,7 +68,7 @@ Get-ChildItem "$env:ProgramFiles" -Filter "magick.exe" -Recurse -ErrorAction Sil
 Path naming: use `/share-diagram-<short-slug>-<timestamp>.png`. The slug helps the user identify what each file is when they look in their Dropbox folder later. Keep the slug short (≤30 chars), alphanumeric with hyphens.
 
 ```bash
-TOKEN="$(cat ~/.dropbox-token 2>/dev/null || echo "$DROPBOX_TOKEN")"
+TOKEN="$(~/.dropbox-token-fresh.sh 2>/dev/null || cat ~/.dropbox-token 2>/dev/null || echo "$DROPBOX_TOKEN")"
 curl -sS -X POST https://content.dropboxapi.com/2/files/upload \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Dropbox-API-Arg: {"path":"/share-diagram-<slug>-<ts>.png","mode":"overwrite","autorename":false,"mute":false}' \
