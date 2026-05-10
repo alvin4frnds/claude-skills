@@ -14,7 +14,7 @@ The point: ping the user on **two channels at once** — Slack (because they liv
 The user must already have:
 
 1. **The slack MCP server installed and connected** — exposes `mcp__slack__conversations_add_message` and `mcp__slack__channels_list`. Verify the tools are available before trying to post.
-2. **A self-DM channel** with the bot — typically `@<bot_username>` (e.g. `@claude_mcp_praveen` for the Crackle workspace).
+2. **A self-DM channel** with the bot — addressed by **the user's Slack member ID** (e.g. `U05MBLHE2J2` for Praveen in workspace `T05MJ9YFFAN`). Do NOT use `@<bot_username>` — that resolves to the bot's self-DM and the user can't see it. Always post to the user's `U...` ID; Slack auto-creates/reuses the bot↔user IM channel.
 3. **Remote Control active** — required for mobile push and the clickable reply URL. Skill auto-detects state per step 2; if off, falls back to Slack-only and surfaces the `⚠️` action block (step 6) every invocation.
    - The Claude mobile app is **assumed installed and signed in** to the same Anthropic account as the CLI; do not surface "install the app" hints.
    - `Push when Claude decides` should be enabled via `/config` for mobile push to actually fire (this is checked once: if the user reports never receiving mobile pushes despite RC being on, suggest checking `/config`).
@@ -83,7 +83,7 @@ So one URL is enough. No separate `claude://` scheme needed.
 
 Call `mcp__slack__conversations_add_message`:
 
-- `channel_id`: the user's self-DM with the bot. Format `@<bot_username>` works, e.g. `@claude_mcp_praveen`. If you don't know the bot username, ask the user once and remember it.
+- `channel_id`: **the user's Slack member ID** (`U...`), not `@<bot_username>`. Posting to `@<bot>` lands in the bot's self-channel where the user can't see it. For Praveen in `T05MJ9YFFAN` use `U05MBLHE2J2`. Look up unknowns via `slack_get_users`.
 - `text`: the composed message + URL/note, formatted as below.
 - `content_type`: `text/markdown`.
 
