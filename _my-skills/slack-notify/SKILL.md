@@ -27,6 +27,21 @@ The user must already have:
 
 If the slack tool isn't available, tell the user it isn't loaded and stop. Do not silently no-op.
 
+## Delegation model
+
+Steps 1, 2, 5, 6 run on the parent (main thread / Opus). Steps 3–4 run inside a Sonnet sub-agent spawned via the Agent tool. The split keeps model judgment on the parent and pushes the rote shell + MCP work to a cheaper, predictable model.
+
+| Step | Where | Why |
+|---|---|---|
+| 1. Compose notification text + pick emoji | Parent | Model judgment — phrasing, tone, good-news vs blocking. |
+| 2. Detect Remote Control state | Parent | Parent already has the session env var; RC state drives both the agent's payload and whether the parent emits the mobile-push phrase. |
+| 3. Assemble status trailer + post to Slack | **Sonnet sub-agent** | Deterministic shell + one MCP call. Keeps MCP noise out of the parent context. |
+| 4. Format message | **Sonnet sub-agent** | The parent passes the agent the upper portion (emoji + text + URL); the agent fills in the trailer and posts the final string. |
+| 5. Emit mobile-push trigger phrase | Parent | **CRITICAL** — the classifier reads the parent transcript. A phrase emitted inside a sub-agent becomes a tool_result string and may not register as a notification moment. |
+| 6. Terminal confirmation block | Parent | The loud RC-off action block needs to land in the parent's user-facing output, not inside an agent result. |
+
+Use the `general-purpose` subagent type (the only one with both `*` tool access and a model override). Pass `model: "sonnet"`. The agent prompt must be **self-contained** — sub-agents don't see the parent conversation, so the parent has to spell out the payload and the expected return shape.
+
 ## Procedure
 
 ### 1. Compose the notification text
@@ -79,17 +94,62 @@ The same URL (`https://claude.ai/code/session_<id>`) works as both:
 
 So one URL is enough. No separate `claude://` scheme needed.
 
-### 3. Post via the Slack MCP tool
+### 3. Hand off to a Sonnet sub-agent — it assembles the trailer and posts
 
-Call `mcp__slack__conversations_add_message`:
+Spawn a `general-purpose` sub-agent with `model: "sonnet"` via the Agent tool. The agent's job: run the deterministic work (assemble the status trailer per step 4, call `mcp__slack__conversations_add_message`), then return a small status object.
 
-- `channel_id`: **the user's Slack member ID** (`U...`), not `@<bot_username>`. Posting to `@<bot>` lands in the bot's self-channel where the user can't see it. For Praveen in `T05MJ9YFFAN` use `U05MBLHE2J2`. Look up unknowns via `slack_get_users`.
-- `text`: the composed message + URL/note, formatted as below.
-- `content_type`: `text/markdown`.
+**Channel ID — pass this in the agent prompt explicitly.** Use the user's Slack member ID (`U...`), not `@<bot_username>`. Posting to `@<bot>` lands in the bot's self-channel where the user can't see it. For Praveen in `T05MJ9YFFAN` use `U05MBLHE2J2`. Look up unknowns via `slack_get_users` **from the parent** (don't make the agent do user-directory lookups — that's wasted Sonnet effort on a one-time lookup the parent can cache).
 
-### 4. Message format
+**Worked example of the Agent call:**
 
-With remote control on (URL detected from JSONL):
+````
+Agent({
+  subagent_type: "general-purpose",
+  model: "sonnet",
+  description: "Post slack notification with status trailer",
+  prompt: `
+You are posting a Slack notification on behalf of the parent session. The parent has already composed the message and detected Remote Control state. Your job is to (a) assemble the status trailer and (b) post via the Slack MCP tool. Do not improvise — follow the steps below.
+
+PAYLOAD (from parent):
+- Emoji:               ✅
+- Message body:        tests passed on the auth refactor — 142 green, 0 failed
+- Remote Control URL:  https://claude.ai/code/session_01AgjnbPSQQ6m9RbuJx76R3P
+- Remote Control state: on
+- Channel ID:          U05MBLHE2J2
+
+STEP A — Assemble status trailer (run shell from the parent's cwd, which you inherit):
+- branch:        \`git --no-optional-locks branch --show-current\` (fallback: \`no-branch\`)
+- last-3-dirs:   last 3 components of \`pwd\`, slash-joined (e.g. \`Code/Learning/awesome-claude-skills\`)
+- plan:          \`python ~/.claude/claude_usage.py\` on macOS/Linux, \`python C:\\Users\\Praveen\\.claude\\claude_usage.py\` on Windows. Fallback: \`plan: ?\`.
+- Trailer = \`<branch> | <last-3-dirs> | <plan>\`
+
+STEP B — Format the final message per the template in the slack-notify skill's "Message format" section:
+- If Remote Control state = on: emoji + body, blank line, URL on its own line, blank line, trailer.
+- If Remote Control state = off: emoji + body, blank line, trailer, blank line, \`_(local session — reply by returning to the terminal)_\`.
+- URL line: bare URL, no surrounding characters, no markdown link syntax.
+
+STEP C — Call mcp__slack__conversations_add_message with:
+  channel_id:    <Channel ID from payload>
+  text:          <formatted message>
+  content_type:  text/markdown
+
+RETURN exactly this structure (no extra prose):
+  posted:  true | false
+  trailer: <the trailer string you assembled>
+  error:   <empty if posted=true, else the failure reason>
+
+Do NOT emit any "notification sent" framing or mobile-push language — the parent handles that.
+`
+})
+````
+
+The agent inherits the parent's cwd and env vars, so `git`, `python`, `~/.claude/claude_usage.py`, and the Slack MCP tool all resolve normally inside the sub-agent.
+
+### 4. Message format (the sub-agent outputs this — spec is duplicated here for human auditability)
+
+The sub-agent fills in the trailer and posts. The parent already passed it the emoji, body, URL, and RC state. This is the canonical format spec — keep it in the skill so a human reading the skill can verify what the agent is told to produce.
+
+With remote control on (URL passed from parent):
 
 ```
 🔔 <notification text>
@@ -121,20 +181,17 @@ The context-window field is intentionally omitted from Slack — it's only meani
 
 Use 🔔 as the lead emoji to make notifications visually distinct from other Slack messages. If the message is good news (tests passed, deploy succeeded), swap to ✅. If it's blocking (waiting on the user, error needing decision), use ⚠️.
 
-### 5. Trigger mobile push alongside the Slack post
+### 5. Trigger mobile push — parent thread only, after the sub-agent returns
 
-Anthropic's mobile push system is **not a tool** — there's no `push_to_mobile()` call. It's an automatic classifier that fires when:
+**Do NOT delegate this step.** Anthropic's mobile push classifier reads the **parent** session transcript, not the contents of sub-agent results. A "Notification sent…" phrase emitted from inside the Sonnet agent becomes a tool_result string and may not register as a user-notification moment.
 
-- Remote Control is active for the current session, AND
-- Claude reaches a moment that warrants user attention (long task done, decision needed, explicit "notify me" request)
-
-The skill being invoked *is* such a moment. To make the push reliably fire, after the Slack post, in your normal terminal output frame the result with explicit notification language. For example:
+After the sub-agent returns `posted: true` — and only if Remote Control is on — the parent emits explicit notification language in its normal terminal output. For example:
 
 > Notification sent. Tests passed (142 green, 0 failed) — user should be notified on Slack and via mobile push.
 
-The exact wording doesn't matter; what matters is that the moment is unambiguously a user-notification event in the session transcript. Anthropic's classifier looks at session signals to decide push timing, and a clearly-framed notification moment is the most reliable trigger.
+The exact wording doesn't matter; what matters is that the moment is unambiguously a user-notification event in the parent transcript. Anthropic's mobile push system is **not a tool** — there's no `push_to_mobile()` call. It's an automatic classifier that fires when (a) Remote Control is active and (b) Claude reaches a moment that warrants user attention.
 
-If Remote Control is off, mobile push cannot fire — Anthropic's push system requires an active Remote Control session as the addressing mechanism. In that case, only Slack goes out, and your terminal output should note: `Mobile push skipped — no active Remote Control session.`
+If Remote Control is off, mobile push cannot fire — Anthropic's push system requires an active Remote Control session as the addressing mechanism. In that case, only Slack goes out, and the parent's terminal output should note: `Mobile push skipped — no active Remote Control session.`
 
 ### 6. Confirm in the local terminal
 

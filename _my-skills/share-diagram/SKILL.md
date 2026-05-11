@@ -37,6 +37,18 @@ If the user says "send me the diagram on slack so I can see it on my phone", tha
    - Detect at the start of the procedure (try `magick --version` or look up the install path on Windows).
    - If missing, tell the user to install: Windows: `winget install ImageMagick.ImageMagick`; macOS: `brew install imagemagick`; Linux: `apt install imagemagick`.
 
+## Delegation model
+
+Step 1 (SVG generation) runs on the parent (main thread / Opus) — that's the model-judgment step (what to draw, layout, labels). Everything after — PNG render, Dropbox upload, share link, `?raw=1` rewrite, Slack post — runs inside a Sonnet sub-agent spawned via the Agent tool. This skill is a cleaner delegation case than `slack-notify` because there's no mobile-push entanglement: the parent has nothing transcript-sensitive to emit after the agent returns, so the entire post-SVG pipeline collapses into a single sub-agent call.
+
+| Step | Where | Why |
+|---|---|---|
+| 1. Generate SVG | Parent | Model judgment — composition, labels, semantic layout. Often delegates further to `visuals-claude`. |
+| 2. Render + upload + share + post (combined) | **Sonnet sub-agent** | Pure shell + curl + one MCP call. Dropbox API JSON, ImageMagick stderr, and the Slack MCP result all stay out of the parent context. |
+| 3. Print confirmation block | Parent | One ✓ line per pipeline step, taken verbatim from the agent's return. |
+
+Use the `general-purpose` subagent type (the only one with both `*` tool access and a model override). Pass `model: "sonnet"`. The agent prompt embeds the full magick + curl + MCP recipe inline, so a human reading this skill still sees the canonical commands.
+
 ## Procedure
 
 ### 1. Generate the diagram as SVG
@@ -48,87 +60,90 @@ Use the `visuals-claude` skill's SVG-generation logic, or write the SVG directly
 
 Save to `$env:TEMP\share-diagram-<timestamp>.svg` (Windows) or `/tmp/share-diagram-<timestamp>.svg` (macOS/Linux). Use a UNIX timestamp to avoid collisions across invocations.
 
-### 2. Render SVG → PNG via ImageMagick
+### 2. Hand off to a Sonnet sub-agent — it runs the rest of the pipeline
 
-Windows (PowerShell), with a known install path:
-```powershell
-$magick = "C:\Program Files\ImageMagick-7.1.2-Q16-HDRI\magick.exe"  # adjust to actual install
-& $magick "$env:TEMP\share-diagram-$ts.svg" -density 200 -background white -alpha remove "$env:TEMP\share-diagram-$ts.png"
-```
+Spawn a `general-purpose` sub-agent with `model: "sonnet"`. The agent runs render → upload → share-link → `?raw=1` rewrite → Slack post, then returns an ordered set of `✓` lines that the parent prints in step 3.
 
-The `-density 200` flag oversamples for crisp text at typical Slack/phone display sizes. `-background white -alpha remove` flattens any transparency to white (Slack's dark mode looks bad with transparent diagrams).
+**Channel ID:** use the user's Slack member ID (`U...`), not `@<bot_username>`. For Praveen in `T05MJ9YFFAN` use `U05MBLHE2J2`. Same convention as `slack-notify`.
 
-If the install path varies, find it once with:
-```powershell
-Get-ChildItem "$env:ProgramFiles" -Filter "magick.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
-```
+**Worked example of the Agent call:**
 
-### 3. Upload to Dropbox
+````
+Agent({
+  subagent_type: "general-purpose",
+  model: "sonnet",
+  description: "Render SVG to PNG, upload to Dropbox, post inline to Slack",
+  prompt: `
+You are completing a diagram-sharing pipeline on behalf of the parent. The parent has already written an SVG to disk and chosen a caption. Your job: render it, host it, and post it inline to Slack. Run the steps in order — stop on first failure and report which step broke.
 
-Path naming: use `/share-diagram-<short-slug>-<timestamp>.png`. The slug helps the user identify what each file is when they look in their Dropbox folder later. Keep the slug short (≤30 chars), alphanumeric with hyphens.
+PAYLOAD (from parent):
+- SVG path:    /tmp/share-diagram-1715444821.svg
+- Slug:        boxes-and-arrows         (short alphanumeric+hyphens, ≤30 chars)
+- Timestamp:   1715444821
+- Caption:     🖼️  Boxes-and-arrows flow of A → B → C
+- Channel ID:  U05MBLHE2J2
 
-```bash
-TOKEN="$(~/.dropbox-token-fresh.sh 2>/dev/null || cat ~/.dropbox-token 2>/dev/null || echo "$DROPBOX_TOKEN")"
-curl -sS -X POST https://content.dropboxapi.com/2/files/upload \
-  -H "Authorization: Bearer $TOKEN" \
-  -H 'Dropbox-API-Arg: {"path":"/share-diagram-<slug>-<ts>.png","mode":"overwrite","autorename":false,"mute":false}' \
-  -H 'Content-Type: application/octet-stream' \
-  --data-binary @"<png-path>"
-```
+STEP A — Render SVG → PNG via ImageMagick
+- PNG path: same directory as SVG, swap \`.svg\` for \`.png\`
+- macOS/Linux:
+    magick "<svg>" -density 200 -background white -alpha remove "<png>"
+- Windows (binary lives at \`C:\\Program Files\\ImageMagick-*-Q16-HDRI\\magick.exe\`):
+    & "C:\\Program Files\\ImageMagick-7.1.2-Q16-HDRI\\magick.exe" "<svg>" -density 200 -background white -alpha remove "<png>"
+- \`-density 200\` oversamples for crisp text at Slack / phone sizes. \`-background white -alpha remove\` flattens transparency (Slack dark mode looks bad with transparent diagrams).
+- If \`magick\` isn't found, stop and report: "ImageMagick not installed — install via \`winget install ImageMagick.ImageMagick\` / \`brew install imagemagick\` / \`apt install imagemagick\`".
 
-Parse the JSON response and confirm `path_display` matches what you sent. If the response has an `error` field, surface it to the user — common ones: `invalid_access_token` (regenerate), `path/conflict` (use `autorename:true` or pick a different name).
+STEP B — Upload to Dropbox
+- Mint a token:
+    TOKEN="$(~/.dropbox-token-fresh.sh 2>/dev/null || cat ~/.dropbox-token 2>/dev/null || echo "$DROPBOX_TOKEN")"
+- Dropbox path: \`/share-diagram-<slug>-<ts>.png\`
+- Upload:
+    curl -sS -X POST https://content.dropboxapi.com/2/files/upload \\
+      -H "Authorization: Bearer $TOKEN" \\
+      -H 'Dropbox-API-Arg: {"path":"/share-diagram-<slug>-<ts>.png","mode":"overwrite","autorename":false,"mute":false}' \\
+      -H 'Content-Type: application/octet-stream' \\
+      --data-binary @"<png-path>"
+- Parse the JSON response. Confirm \`path_display\` matches what you sent.
+- On \`error\` field, stop and surface verbatim. Common cases: \`invalid_access_token\` → tell the user to regenerate at https://www.dropbox.com/developers/apps; \`path/conflict\` → pick a different name.
+- App Folder permission type (most common): \`/foo.png\` is at \`Apps/<your-app-name>/foo.png\` from the user's perspective. Fine — they own the file.
 
-For App Folder permission type apps (most common), the Dropbox path is relative to the app's folder, not the user's Dropbox root. So `/foo.png` lives at `Apps/<your-app-name>/foo.png` from the user's perspective. This is fine — the user owns the file.
+STEP C — Create a public share link
+- Command:
+    curl -sS -X POST https://api.dropboxapi.com/2/sharing/create_shared_link_with_settings \\
+      -H "Authorization: Bearer $TOKEN" \\
+      -H 'Content-Type: application/json' \\
+      --data '{"path":"/share-diagram-<slug>-<ts>.png","settings":{"requested_visibility":"public"}}'
+- Parse \`url\` field. Looks like \`https://www.dropbox.com/scl/fi/<id>/<filename>?rlkey=<key>&dl=0\`.
+- If error \`shared_link_already_exists\`: extract the existing URL from the error payload (\`error.shared_link_already_exists.url\`) and reuse — do NOT crash, do NOT retry with a different path.
 
-### 4. Create a public share link
+STEP D — Convert \`?dl=0\` → \`?raw=1\`
+- Slack's image unfurl needs a URL that returns raw image bytes with \`Content-Type: image/...\`, not an HTML preview page. \`?dl=0\` returns HTML; \`?raw=1\` returns the file.
+- Replace \`dl=0\` with \`raw=1\` in the URL. Final form:
+    https://www.dropbox.com/scl/fi/<id>/<filename>?rlkey=<key>&raw=1
 
-```bash
-curl -sS -X POST https://api.dropboxapi.com/2/sharing/create_shared_link_with_settings \
-  -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' \
-  --data '{"path":"/share-diagram-<slug>-<ts>.png","settings":{"requested_visibility":"public"}}'
-```
+STEP E — Post to Slack
+- Call mcp__slack__conversations_add_message with:
+    channel_id:    <Channel ID from payload>
+    content_type:  text/plain
+    text:          <caption>\\n\\n<raw-url>
+- The blank line between caption and URL is required — it keeps the URL standalone so Slack's link parser doesn't grab adjacent characters. \`text/plain\` avoids markdown-rendering surprises with the URL (see slack-notify's URL-format fix from commit 76db681).
 
-Parse the `url` field — looks like `https://www.dropbox.com/scl/fi/<id>/<filename>?rlkey=<key>&dl=0`.
+RETURN exactly this structure, one line per step (✓ on success, ✗ + reason on failure):
+  ✓ Rendered PNG: <bytes> bytes
+  ✓ Uploaded to Dropbox: <path_display>
+  ✓ Shared link: <dropbox-url-with-dl=0>
+  ✓ Inline URL: <dropbox-url-with-raw=1>
+  ✓ Slack: posted to <channel_id>
 
-**If the file already has a shared link** (you uploaded the same path before), the API returns an error `shared_link_already_exists` with the existing URL. Catch that and reuse the existing URL — don't crash the skill.
+If any step fails, output the prior ✓ lines and a single ✗ line for the failing step. Do not retry. Do not silently skip steps. Do not post if any earlier step errored.
+`
+})
+````
 
-### 5. Convert to inline-content URL for Slack
+The agent inherits the parent's env, so `~/.dropbox-token-fresh.sh`, `magick`, `curl`, and the Slack MCP tool all resolve normally inside the sub-agent.
 
-Slack's image unfurl needs a URL that returns raw image bytes with `Content-Type: image/...`, not an HTML preview page. Dropbox's default `?dl=0` returns HTML; `?raw=1` (or `?dl=1`) returns the file directly.
+### 3. Print the agent's report
 
-Replace `dl=0` with `raw=1` in the URL. Final form:
-```
-https://www.dropbox.com/scl/fi/<id>/<filename>?rlkey=<key>&raw=1
-```
-
-### 6. Post to Slack via the existing MCP tool
-
-Call `mcp__slack__conversations_add_message`:
-
-- `channel_id`: `@<bot-username>` (e.g. `@claude_mcp_praveen` for Crackle). Same convention as `slack-notify`.
-- `content_type`: `text/plain` (avoids any markdown-rendering surprises with the URL — see slack-notify's URL-format fix from commit 76db681).
-- `text`: a short caption + the inline-content URL on its own line. Format:
-
-```
-🖼️  <one-line caption describing the diagram>
-
-<dropbox-raw-url>
-```
-
-The blank line between caption and URL is important — keeps the URL standalone so Slack's link parser doesn't grab adjacent characters.
-
-### 7. Confirm in the local terminal
-
-One short line per pipeline step:
-
-- `✓ Generated SVG: <path>`
-- `✓ Rendered PNG: <size> bytes`
-- `✓ Uploaded to Dropbox: <path>`
-- `✓ Shared link: <url>`
-- `✓ Slack: posted to @<bot>`
-
-If any step fails, surface the error and stop — don't post a broken link.
+Prepend a leading `✓ Generated SVG: <path>` line (the agent doesn't know what the parent did before invoking it), then surface the agent's ordered lines verbatim. On any `✗` line, stop after printing — don't post a follow-up, don't retry. The user sees exactly which pipeline step broke.
 
 ## Edge cases
 
