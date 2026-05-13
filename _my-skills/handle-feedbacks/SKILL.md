@@ -91,12 +91,13 @@ b) USER MISTAKE — the feedback contradicts the code or rests on a wrong premis
 
 c) ACTIONABLE — feedback is clear and you can produce a usable plan now.
    → write to: plans/NNN-slug.md
-   → if the plan involves code changes, read ~/.claude/skills/clean-code/SKILL.md and apply those principles.
+   → Read ~/.claude/skills/spec-writer/SKILL.md and produce the plan using its 13-section task-packet structure. **Skip spec-writer's pre-spec interview** — you are an agent with no user to ask; mark any genuine gaps as `<INPUT_REQUIRED>` in §5 (Open Questions). **Ignore spec-writer's sprint-folder filename convention** — the filename and location are fixed: `plans/NNN-slug.md` inside this workspace, and the H1 should be `# Plan: <one-line summary>` with a `**Source feedback:** feedbacks/NNN-slug.md` line below it.
+   → For code changes, also read ~/.claude/skills/clean-code/SKILL.md and apply its principles within the spec's Approach / Implementation sections.
 
 Rules:
 - Write to exactly ONE bucket. Do not split a feedback across multiple files.
 - Do not modify any other file in the workspace or target codebase.
-- File templates are below — follow them.
+- File templates for questions/ and corrections/ are below — follow them. For plans/, follow spec-writer's structure (see above).
 
 [questions/NNN-slug.md template]
 # Question: <one-line summary>
@@ -129,38 +130,6 @@ Rules:
 <reasoning>
 
 **Confidence:** low | medium | high
-
-
-[plans/NNN-slug.md — code-bearing template]
-# Plan: <one-line summary>
-
-**Source feedback:** feedbacks/NNN-slug.md
-
-## Context
-<why this change matters>
-
-## Approach
-<clean-code style outline; cite specific principles where they apply>
-
-## Files to touch
-- path/to/file.ext — <what changes>
-
-## Verification
-<how to test end-to-end — commands, manual checks>
-
-
-[plans/NNN-slug.md — docs-only template]
-# Plan: <one-line summary>
-
-**Source feedback:** feedbacks/NNN-slug.md
-
-**Files to update:**
-- path/to/doc.md
-- path/to/other-doc.md
-
-**Changes per file:**
-- path/to/doc.md — <short bullet>
-- path/to/other-doc.md — <short bullet>
 ```
 
 After all triage agents return, verify each one wrote exactly one output file in the expected bucket. If an agent failed or wrote junk, treat that feedback as a question and write a minimal `questions/NNN-slug.md` yourself describing the failure.
@@ -219,17 +188,17 @@ Original triage output (question or correction):
 User's resolution:
 <inline text of the user's answer / decision>
 
-If the plan involves code changes, read ~/.claude/skills/clean-code/SKILL.md first and apply its principles to the Approach section.
+Read ~/.claude/skills/spec-writer/SKILL.md and produce the plan using its 13-section task-packet structure (grounded citations, manual QA tables, the works). The user's resolution above is your interview input — **skip spec-writer's pre-spec interview**; mark any remaining gaps as `<INPUT_REQUIRED>` in §5 (Open Questions). For code changes, also read ~/.claude/skills/clean-code/SKILL.md and apply its principles inside the Approach / Implementation sections.
 
-Write the plan to: <ABSOLUTE_TARGET_ROOT>/docs/feedbacks/triage/{KEY}/plans/NNN-slug.md
-Use the plan template:
+**Ignore spec-writer's sprint-folder filename convention.** The plan file location is fixed:
+  <ABSOLUTE_TARGET_ROOT>/docs/feedbacks/triage/{KEY}/plans/NNN-slug.md
+
+Start the file with:
 
 # Plan: <one-line summary>
 **Source feedback:** feedbacks/NNN-slug.md
-## Context
-## Approach
-## Files to touch
-## Verification
+
+…then the 13 sections from spec-writer.
 
 After writing the plan, append exactly this line to <ABSOLUTE_TARGET_ROOT>/docs/feedbacks/triage/{KEY}/_state.md:
 DONE: NNN-slug.md
@@ -285,7 +254,7 @@ End your turn after this message. Your job is done.
 
 - **Manually invoked only.** The frontmatter description suppresses auto-load. Do not invoke this skill on your own.
 - **Skill does NOT delete the workspace.** Cleanup is the implementing session's responsibility, gated on user confirmation after verification. The handoff 1-liner makes that explicit.
-- **Skill does NOT chain into prod-safety-gate / clean-code / vibesec at its own level.** It's pure orchestration. The background planning agents pull in clean-code on demand for code-bearing plans.
+- **Skill does NOT chain into prod-safety-gate / clean-code / vibesec at its own level.** It's pure orchestration. Plan-writing agents (both the Phase 1 triage agent on bucket `c` and the Phase 2 background planning agent) pull in `spec-writer` for the 13-section structure, and additionally pull in `clean-code` for code-bearing plans. The pre-spec interview from spec-writer is intentionally skipped — by the time a plan is being written, either the feedback was already actionable (Phase 1) or the user's resolution has already been captured (Phase 2).
 - **Skill does NOT auto-implement plans.** The handoff is the exit point — do not start implementing.
 - **Single batch at a time.** If a previous in-progress key exists in `docs/feedbacks/triage/`, ask the user whether to resume or start fresh.
 - **Don't block the user during planning.** Plan generation is always a background agent so the user can move to the next question / correction immediately.

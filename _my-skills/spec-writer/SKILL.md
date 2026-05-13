@@ -209,26 +209,37 @@ If rollback has a state-dependent fork (e.g., "if env var was already removed, a
 #### 12a. Automated verification
 Concrete shell block(s) the implementer can paste. Lint, unit tests, full suite, any byte-equality checks that enforce §8a Hard NOs (e.g. `git diff -- <forbidden-file>` must produce no output).
 
-#### 12b. Manual QA cases (MANDATORY)
+#### 12b. Manual QA cases (MANDATORY — executed by the implementing agent)
+
 Per the target repo's verification protocol (typically `CLAUDE.md`): BE first, then FE.
 
-Four tables, each with columns: `# | Case | Steps | Expected | Status`. Status values: `Pass` / `Fail` / `Blocked` / `Not Run`.
+Open §12b with a **responsibility header** that states the implementing agent (not a human dev) executes every case and fills the `Status` column before declaring the work done. `Not Run` is unacceptable at hand-off — final values are `Pass` / `Fail` / `Blocked` / `Skipped (reason)`.
+
+**Canonical toolbox** the agent uses (and that the spec's `Steps` column should be written in terms of):
+- **Backend / API:** literal `curl` invocations against the local dev server, `psql -h <host> -U <user> -d <db> -c "..."` for DB-state assertions, and `php artisan ...` (or the target stack's CLI equivalent) for command-line entry points. Substitute project-specific values (DB creds, ports, app URL) from the repo's local-dev memory / `CLAUDE.md`.
+- **Frontend / UI:** Playwright assertion sketches. Reuse the repo's existing harness — find it via `playwright.config.ts` / `playwright.config.js` and any `tests/e2e/` directory — and write the `Steps` column as Playwright calls (`page.goto`, `page.getByRole`, `expect(...)`). If the repo already has a DB-reset endpoint (e.g. `POST /__playwright/reset`), reference it; otherwise prescribe one in the spec.
+- **Chrome DevTools:** wire the same Playwright run with `page.on('console')` + `page.on('response')` listeners rather than "open DevTools and look at the Network tab" prose — the agent has no human eyes to read panels.
+- **Operator-executed:** the only table whose cases the agent does not run itself. Reserve for staging soak, prod cut-over, or external-party actions.
+
+Each `Steps` cell is the literal command / Playwright assertion the agent runs verbatim — not a paragraph of instructions written for a human. If the agent would need to "interpret" the cell, the cell is under-specified.
+
+Four tables, each with columns: `# | Case | Steps | Expected | Status`.
 
 ```md
-#### Backend / API
-| # | Case | Steps | Expected | Status |
-| - | ---- | ----- | -------- | ------ |
-| BE-1 | <case> | <command/curl/artisan> | <observable> | Not Run |
+#### Backend / API (`curl` + `psql` + CLI)
+| # | Case | Steps (literal commands) | Expected | Status |
+| - | ---- | ----------------------- | -------- | ------ |
+| BE-1 | <case> | `curl -s -X POST <APP_URL>/api/... -d '{...}'` then `psql -c "SELECT ..."` | HTTP 200; row count = N | Not Run |
 
-#### Frontend / UI
-| # | Case | Steps | Expected | Status |
-| - | ---- | ----- | -------- | ------ |
-| FE-1 | <case> | <user gesture sequence> | <DOM/visual outcome> | Not Run |
+#### Frontend / UI (Playwright headed run, agent writes scratch spec)
+| # | Case | Playwright steps (inside the spec) | Expected (assertions) | Status |
+| - | ---- | ---------------------------------- | --------------------- | ------ |
+| FE-1 | <case> | `await page.goto('/...'); await expect(page.getByRole('...')).toBeVisible();` | <assertion outcome> | Not Run |
 
-#### Chrome DevTools / extension verification
-| # | Case | Steps | Expected | Status |
-| - | ---- | ----- | -------- | ------ |
-| CHROME-1 | <case> | <DevTools panel + steps> | <network/console/DOM observable> | Not Run |
+#### Chrome DevTools / Playwright network + console assertions
+| # | Case | Playwright assertion | Expected | Status |
+| - | ---- | -------------------- | -------- | ------ |
+| CHROME-1 | <case> | `page.on('response', ...)` / `page.on('console', ...)` listener | <captured shape> | Not Run |
 
 #### Operator-executed (post-cutover, see AC-OPERATOR)
 | # | Case | Steps | Expected | Status |
@@ -236,9 +247,12 @@ Four tables, each with columns: `# | Case | Steps | Expected | Status`. Status v
 | OP-1 | <case> | <operator action> | <observable> | Not Run |
 ```
 
+For FE / Chrome cases, the agent typically writes a scratch spec at `<repo>/tests/e2e/<slug>.spec.ts` (or the repo's equivalent path), runs it `--headed`, and then either commits it as a permanent e2e checkpoint OR deletes it before opening the PR. The spec tells the agent to pick one and note the choice in the PR description.
+
 **Mandatory rules:**
 - A spec is **not complete** unless every applicable table has at least one case populated. If a surface genuinely doesn't apply (BE-only change → no FE / Chrome cases), mark the table `N/A` with a one-line reason (e.g. "N/A — no FE files touched. If this changes, fail the implementation and add cases.").
-- An implementation is **not complete** unless every applicable case has Status ≠ `Not Run`. The implementer fills BE / FE / Chrome statuses as they execute; the operator fills OP statuses. The user may explicitly waive cases — when waived, record the waiver in §5.
+- An implementation is **not complete** unless every applicable case has Status ≠ `Not Run`. **The implementing agent fills BE / FE / Chrome statuses themselves** as part of the QA loop — they do not defer this to a human reviewer. The operator fills OP statuses. The user may explicitly waive cases — when waived, record the waiver in §5.
+- Every `Steps` cell that reads like English prose to a human ("log in, click the X button, look for Y") is a bug in the spec. Rewrite it as commands the agent runs.
 
 #### 12c. Definition of Done
 A bulleted checklist that closes the packet:
@@ -289,6 +303,7 @@ Once the file is on disk:
 - **No under-specified tests.** Every behavior change has at least one BE manual case AND at least one automated test in §7. UI changes additionally have an FE case. Auth / token / external-input changes additionally have a vibesec-justified test.
 - **No skipping rollback / risk thinking.** If §10 has fewer than 3 rows or §11 has fewer than 4 steps, you haven't thought hard enough.
 - **No re-spec-ing without checking the prior packet.** If the user references a prior `claude-task--NNN`, `Read` it first; mirror its scope decisions; don't re-litigate resolved questions.
+- **No dev-facing prose in §12b.** Manual QA cases are executed by the implementing agent, not a human reviewer. Every `Steps` cell is a literal command (`curl`, `psql`, `php artisan`) or a Playwright assertion (`await page.goto(...)`, `await expect(...)`). Sentences like "log in as admin, click the X button, verify Y appears" are bugs — rewrite them.
 
 ---
 
