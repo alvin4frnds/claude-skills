@@ -1,6 +1,7 @@
 ---
 name: spec-writer
 description: Produce a 13-section implementation spec ("task packet") that another Claude session can ship from. Triggers on `/spec`, "write a spec", "scope this", "spec this out", "task packet", "claude-task". Auto-detects sprint folder, task number, and slug; runs a hybrid pre-spec interview (max 3 production-critical questions, otherwise marks gaps as `<INPUT_REQUIRED>`); grounds every claim in `path:line` citations from the actual code; mandates Manual QA tables (BE / FE / Chrome DevTools / Operator). Always pairs with `clean-code`; pulls in `prod-safety-gate` for production paths, `test-driven-development` for behavior changes, and `vibesec` for security-sensitive code.
+model: claude-opus-4-7
 ---
 
 # spec-writer — 13-section task-packet generator
