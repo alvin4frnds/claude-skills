@@ -11,7 +11,7 @@ description: Refactor or write code in the clean-code style of Jeffrey Way / Ada
 
 ## Overview
 
-This skill encodes 35 clean-code principles distilled from 27 Laracasts tutorials into an operational guide for refactoring existing code and writing new code. It is opinionated: it favors clarity over architectural rules, prefers domain objects over primitives, and treats every refactor as a hypothesis to be tested with the question *"is it better?"*.
+This skill encodes **63 clean-code principles** distilled from ~85 Laracasts tutorials into an operational guide for refactoring existing code and writing new code. Source series include the original *10 Techniques for Cleaner Code*, *SOLID Principles in PHP*, *Long-form Refactoring Workshops*, and *Code Reflections* (Jeffrey Way), plus six recent additions: *BaseCode Reloaded* (Jason McCreary, 2025), *Write Code That's Easy to Maintain* (Katerina Trajchevska), *Whip Monstrous Code Into Shape* (Way), *Object-Oriented Principles in PHP — 2024 Edition* (Way), and *How to Read Code* (Way). It is opinionated: it favors clarity over architectural rules, prefers domain objects over primitives, and treats every refactor as a hypothesis to be tested with the question *"is it better?"*.
 
 ## When to use this skill
 
@@ -80,6 +80,8 @@ The full motivation, rationale, "how to apply" guidance, and canonical code exam
 - Encode the parameter's meaning in the method name (`fetchByBillingId(123)`, not `fetch(123)`).
 - Aim for ≤ 2-word method names. When you can't, the method is probably doing too much. Conjunctions ("And", "Or") in names are red flags.
 - Don't repeat the receiver's noun in its method names. On `Order` define `ship()`, not `shipTheOrder()`. Repeated prefixes across methods (`addX`, `removeX`, `hasX`) signal a missing class.
+- **Delete dead code on sight** — commented-out blocks, unreachable branches, abandoned options arrays. Git history is the archive; the working tree is for code that runs.
+- **Apply a code style automatically with a shared tool** (Pint / Prettier / gofmt). Commit the config; enforce in CI. Stop debating style after the initial choice.
 
 ### Control flow
 - Don't use `else`. Invert the predicate, use early-return / guard clauses, or throw at the top.
@@ -90,7 +92,9 @@ The full motivation, rationale, "how to apply" guidance, and canonical code exam
 
 ### Functions and methods
 - Don't expose `bool` parameters that switch behavior. Extract a sibling method (`muteTemporarily`) or accept a structured parameter (`$attributes` array).
+- **Four or more parameters signal a missing class** — extract a Strategy/DTO/Driver that owns the cluster, not a parameter object for its own sake. (Distinct from Bob Martin's "≤2 params" rule — this catalog does not adopt that.)
 - A method should return one type. If it sometimes returns a value and sometimes throws or returns null, decide which.
+- **Return a typed default (`[]`, `''`, Null Object), not `null`** — every null return propagates as a guard requirement up the stack. Some platform functions genuinely return null on error; keep guards there, don't let nulls leak deeper.
 - Inline single-use locals and helpers. Extracting a one-liner with a name no clearer than the body is noise.
 - Don't extract until you'd actually reuse it. Extracting a service class as the first refactor is overreach.
 - Comments are a flashlight, not a structural tool. Replace them by making the code self-describing — extract a method whose name says what the comment said.
@@ -100,6 +104,10 @@ The full motivation, rationale, "how to apply" guidance, and canonical code exam
 - Encapsulate raw column updates behind expressive model methods (`$user->upgradeToPro()`, not `$user->update(['plan' => 'pro', 'upgraded_at' => now()])`).
 - Replace primitives with domain objects at method boundaries (`User`, not `$userId`; `Money`, not `(int $amount, string $currency)`).
 - Wrap primitives only when they earn it: a value with non-trivial validation, formatting, or behavior. Don't wrap `int $age` for the sake of it.
+- **Default method visibility to `protected` (or `private`)** — public is intentional, not the default. Use getters (or PHP 8.4 property hooks) rather than public properties so you keep the right to intercept reads later.
+- **Use capability interfaces** (`CanBeLiked`, `Sortable`) — name interfaces after what a class *can do*, not what it *is*. Type-hint against the capability so any new class that signs the contract is admitted without consumer edits.
+- **Compose, don't inherit, for cross-cutting concerns** (billing, mailing, geolocation). Extract behaviour into a collaborator class, inject via interface, swap providers with one binding change. Traits look like composition but compile to inheritance — same coupling risk.
+- **In PHP 8.4+, use property hooks + asymmetric visibility** (`public private(set) string $email`, `get`/`set` blocks). Encapsulation discipline without getter/setter boilerplate.
 - Limit instance variables (collaborators) per class. ~5 is the upper bound. More usually means missing extractions or the class is doing too much.
 
 ### Abstraction and polymorphism
@@ -110,12 +118,24 @@ The full motivation, rationale, "how to apply" guidance, and canonical code exam
   - **ISP** — many small interfaces beat one fat one. If implementers leave methods empty, split the interface.
   - **DIP** — depend on abstractions, not concretions. Modules at the same level of policy shouldn't depend on each other directly.
 - Strategy / Factory / Template Method are reachable when you see specific shapes; don't reach for them as a default. See `references/principles.md` for the diagnostic signals and refactor recipes.
+- **Prefer constructor property promotion (PHP 8.0+)** — declare typed properties inline in the constructor signature. Pair with `readonly` for immutable DI.
+- **Use typed DTOs instead of associative arrays** for multi-field data crossing boundaries. PHP lacks native generics; document collections with `/** @param Song[] $songs */` and let PHPStan/Psalm enforce.
 
 ### Architecture and module shape
 - **Be strict with controllers.** A controller's job is the request lifecycle (validate, invoke, respond), nothing else. Push business logic into models or use cases. Validating an HTTP request *in* the controller is fine — that's request-shape work.
 - **Encapsulate user actions as use cases.** When a controller orchestrates 4–6 steps to fulfill one user action, extract those steps into a single class named for the action (`PublishPost`, `RefundOrder`).
+- **Reach for a named extraction pattern when refactoring fat classes.** The pattern catalogue (in `references/principles.md`) maps symptoms to patterns: Form Object, Use Case, Domain Event, Policy, Pass-Through, Single-use Trait, Value Object via Accessor, Tasks-as-Steps, Strategy + Factory, Normalize, Query Object, View Model, Decorator, Fluent Interface, Wrap-third-party. Pick the one that matches the smell most precisely.
+- **Refactor views with the same discipline as classes.** Extract sections into partials, repeated markup into reusable item partials, type-switches into dynamic includes (`@include('statuses.' . $status->type)`).
+- **Use a Null Object to eliminate presence/auth checks at the call site** (`GuestUser` extending `User`, `EmptyCart` implementing `Cart`). Pairs naturally with "Return a typed default, not null."
 - **Co-locate everything a feature needs.** Module-by-feature beats module-by-layer when files of one feature are fighting across half a dozen directories.
 - Don't reach for events + listeners for what is effectively four lines of code.
+
+### Reading code
+- **Get the unfamiliar codebase running locally before reading any of it.** Reading without a live app is guessing. Bootstrap friction is normal, not a sign of bad code.
+- **Read the entry-point routing file first** (`routes/web.php`, Express `app.use()`, Nuxt `pages/`). It's the bird's-eye view of every surface the app exposes; every other file gets a coordinate.
+- **Trace unfamiliar globals/helpers/middleware to their origin** before assuming framework magic. Check `composer.json` autoload, `Kernel.php` registration, service providers. Classify symbols as framework / project / vendor — the right reading strategy follows automatically.
+- **Verify your mental model with `dd()` at branch points.** Reading is hypothesis-forming; `dd()` is the experiment. Don't trust your reading until the value confirms it.
+- **Re-implement what you read with TDD to commit the lessons.** Reading produces the illusion of understanding; building reveals the gaps. Discard the re-implementation when done — its value was learning.
 
 ### Refactoring practice
 - **Cover code with tests before refactoring.** Without tests, refactoring is rewriting.
@@ -123,11 +143,21 @@ The full motivation, rationale, "how to apply" guidance, and canonical code exam
 - **Make every step mechanical and reversible.** A failing test is information; a 200-line uncommitted diff is panic.
 - **"Is it better?"** is the only real test of a refactor. If yes, keep. If no — including "kind of a wash" — revert.
 - **Sweat the small stuff.** Tiny consistent improvements (use `abort_if`, use `optional()->method()`, prefer `[]` over `array()`) compound. Each one is harmless; ignoring them all corrodes a codebase.
+- **Apply the three-step process to big blocks:** label the reading level → add comments to identify sub-blocks → ask each sub-block "is there a native way?" and "does this belong at this level?"
+- **Write pseudo-code for the ideal call site first**, then build the system to produce that API. Catches wrong abstractions before any code is written.
+- **Apply the proximity rule before refactoring a loop** — move every variable used inside the loop adjacent to it; the loop's intent usually becomes obvious enough to replace with `array_filter`/`array_map`/`Collection::pipe`.
+- **Apply the Rule of Three before extracting an abstraction.** Two cases is not enough information to design correctly. Sandi Metz: "duplication is far cheaper than the wrong abstraction."
+- **Pursue symmetry at three levels:** syntactic (same code structure), semantic (same vocabulary — `read/create/update/delete`, not `fetch/save/modify/remove`), systemic (same design patterns across the codebase).
+- **Scratch refactor for ≤30 minutes to learn unfamiliar code**, then throw it all away. It's a learning technique, not a refactor technique.
+- **Use Sprout and Wrap to extend legacy code surgically.** Sprout = clean new tested class called from one line in the legacy; Wrap = rename old method `*Legacy`, new same-named method calls it plus pre/post.
+- **Don't overdo SOLID.** If applying it creates 4-file-hops to change one form field, simplify. Ask "how do I expect this to change?" before reaching for an interface.
 
 ### Testing
 - Tests prove only what they assert. If a refactor passes tests but you don't trust the result, the tests are too loose. Tighten the matchers; add control fixtures (a row that *shouldn't* match) so a too-broad query fails the test.
 - Prefer endpoint / behavior tests at the seam where the user touches the system. Cover the implementation through behavior, not parallel to it.
 - Mocks are for adapters at the edge of the system (mail, HTTP, queue), not for the system under test.
+- **Use characterization tests (Michael Feathers) on untested legacy code.** Assert what you *assume* the code does, run it, let the failure teach you the real behaviour. The test was the *tool* for discovering behaviour, not for verifying a specification you had.
+- **Extract a factory method to create a seam for mocking.** When legacy code does `new BankAPI()` inline, extract `protected createBankAPI()`. Tests subclass and override — production unchanged, unit testable. Promote to full DI as a smaller next step.
 
 ## Anti-patterns to refuse
 
@@ -139,23 +169,32 @@ These are the reflexes the speakers consistently push back on. When the user ask
 - A service class as the *first* refactor for any controller method.
 - Events + listeners for four lines of synchronous code.
 - Wrapping every primitive in a value object.
-- Mocking the database in tests.
+- Mocking the database in tests (including in characterization tests — those need a real `_test` DB).
 - Splitting one cohesive function into N files because "SRP".
 - Writing comments instead of better names.
 - Naming abstract hooks after a specific subclass's value (`addTurkey` instead of `addPrimaryToppings`).
+- **Adding another switch-case branch to a god class** instead of using a seam, sprout, or wrap. Adding cases to untested code multiplies untested code.
+- **Inheriting just to share methods that don't pass the "is-a" test.** `EmailNotification is a Notification` ✓; `Subscription is a Billing` ✗ → use composition.
+- **Pattern bingo — forcing a design pattern prematurely** (Strategy/Factory/Observer/Decorator) before there's a real second case driving the abstraction. Creates asymmetry where there was none.
+- **Public properties when a getter (or PHP 8.4 property hook) would preserve the right to intercept later.** Defaulting to public ties you to one specific implementation.
+- **Hand-rolling a presenter package when an abstract base + `__get` magic method works.** "Keep it simple, stupid" — the simplest version that solves the problem is usually right.
+- **Reaching for SOLID mechanics that produce 4-file-hops to change a single form field.** Navigation cost > structural purity.
+- **Quoting Robert Martin's "≤2 parameters" rule from *Clean Code* (book).** This catalog does not adopt it. The Laracasts-flavored signal is **4+ parameters → missing class**, with the fix being extraction, not parameter-count reduction.
 
 ## Cross-cutting themes
 
-Four themes thread through the entire catalog — when in doubt, return to these:
+Six themes thread through the entire catalog — when in doubt, return to these:
 
 1. **Constants beat literals.** Magic numbers, ambiguous units, boolean flags — all the same problem. A value the reader has to decode at the call site is worse than a name. Replace with named constants, named constructors, or named methods.
 2. **Objects beat primitives at boundaries.** Pass a `User`, not an email string. An `EmailAddress`, not a validated string. A `Subscription`, not a `'monthly'`/`'forever'` discriminator. Each replaces branching at the call site with polymorphism on the type.
 3. **The right owner runs the show.** Most refactors come down to moving a decision to where the data lives — tell-don't-ask, drop-down-a-level, encapsulated use cases. Controllers invite, models orchestrate the fields they own.
-4. **Tests are the safety net that buys all of this.** A green suite is the precondition for "play". Refactoring without tests is rewriting.
+4. **Tests are the safety net that buys all of this.** A green suite is the precondition for "play". Refactoring without tests is rewriting. For untested legacy, characterization tests come first.
+5. **Symmetry — the same idea expressed the same way everywhere it appears.** Syntactic (consistent structure), semantic (consistent vocabulary), systemic (consistent design patterns). Symmetric code is predictable code; a reader who's seen one part can guess the next.
+6. **Reading is half the job.** Before changing code, understand it the way the author did. Get it running locally, read the routes first, trace globals to their origin, verify with `dd()`, re-implement with TDD to make the lessons stick. Reading without a working app is guessing.
 
 ## Reference files
 
-- `references/principles.md` — the full 35-principle catalog with motivation, "how to apply", canonical PHP examples, and source citations. Load this when a specific principle needs depth, when justifying an unusual refactor, or when the user asks for the rationale behind a rule.
+- `references/principles.md` — the full 63-principle catalog with motivation, "how to apply", canonical PHP examples, and source citations. Load this when a specific principle needs depth, when justifying an unusual refactor, or when the user asks for the rationale behind a rule.
 
 ## Notes on PHP examples
 
