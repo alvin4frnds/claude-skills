@@ -8,6 +8,7 @@ Each subfolder is a self-contained skill (a `SKILL.md` plus any reference files 
 
 - **`recommend-skills/`** — the meta-skill invoked as `/recommend-skills`. Matches a task against the local awesome-claude-skills catalog, lets the user pick skill(s) via AskUserQuestion, then handles the original task using the selected skill(s).
 - **`clean-code/`** — refactor or write code in the clean-code style of Jeffrey Way / Adam Wathan / Aaron Francis (Laracasts). Triggers on requests to refactor, simplify, or improve readability.
+- **`implement-sprint/`** — autonomous per-packet sprint executor, invoked as `/implement-sprint` (optionally `/implement-sprint 15` to pin a sprint). Acts as an orchestrator: enumerates a sprint's `claude-task--NNN--*.md` packets in numeric order, skips ones already marked Done, and for the rest dispatches one isolated git-worktree agent that verifies-first → implements → drives the full toolchain + every BE/FE/CHROME manual-QA case green → flips Status to Done, then merges each green packet to local `master`. Never pushes; never touches foreign worktrees. **Note:** this is a repo-specific skill written for the `crackle-orchestrator` codebase (its CONVENTIONS, Laravel/Pest/Vitest toolchain, Stop hook, and Slack DM target) — kept here as a snapshot/reference rather than a portable general-purpose skill.
 
 ## Install on a new machine
 
