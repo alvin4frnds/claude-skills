@@ -1,6 +1,6 @@
 ---
 name: slack-notify
-description: Notify the user on BOTH Slack and Anthropic's mobile push, with the active Remote Control session URL appended so they can click through and command the same local session back. Triggers on "notify me on slack", "slack me", "ping me on slack", "let me know via slack", "notify me when". AUTO-DETECTS Remote Control state by reading the bridge_status event in the session JSONL — never asks the user. The same URL works as a desktop browser link AND a mobile app universal link (assume Claude app installed). Appends a pipe-separated status trailer (branch | path | plan) on a new line after the URL, mirroring the user's terminal status line. Uses the slack MCP server's conversations_add_message tool for the Slack post; mobile push fires automatically when Remote Control is active. If RC is off, posts Slack-only and surfaces a loud terminal action block telling the user how to flip the toggle.
+description: Notify the user on BOTH Slack and Anthropic's mobile push, with the active Remote Control session URL appended so they can click through and command the same local session back. Triggers on "notify me on slack", "slack me", "ping me on slack", "let me know via slack", "notify me when". AUTO-DETECTS Remote Control state by reading the bridge_status event in the session JSONL — never asks the user. The same URL works as a desktop browser link AND a mobile app universal link (assume Claude app installed). Appends a pipe-separated status trailer (branch | path) on a new line after the URL, mirroring the user's terminal status line. Posts via the @Claude MCP bot token (xoxb) through slack-bot-notify.sh — the only identity that actually push-notifies the user, since every user-token Slack connector posts AS the user and Slack never notifies you of your own messages. Mobile push fires automatically when Remote Control is active. If RC is off, posts Slack-only and surfaces a loud terminal action block telling the user how to flip the toggle.
 ---
 
 # slack-notify — push a notification to Slack + Anthropic mobile, with remote-control deep-link
@@ -13,8 +13,9 @@ The point: ping the user on **two channels at once** — Slack (because they liv
 
 The user must already have:
 
-1. **The slack MCP server installed and connected** — exposes `mcp__slack__conversations_add_message` and `mcp__slack__channels_list`. Verify the tools are available before trying to post.
-2. **A self-DM channel** with the bot — typically `@<bot_username>` (e.g. `@claude_mcp_praveen` for the Crackle workspace).
+1. **The @Claude MCP bot token** saved at `~/.claude/.slack_xure_bot_token` (an `xoxb-…` token for the `@Claude MCP` bot, `U0B2W0ARS5P`, in the **Xure / xure-solutions** workspace, team `T05MJ9YFFAN`). The posting helper `slack-bot-notify.sh` (next to this file) reads it. **Do NOT use any `mcp__slack__*` / claude.ai Slack connector to post a notification** — those log in AS the user, and Slack never notifies you of your own messages (learned the hard way 2026-06-07). The bot is a *different* identity, so its DM actually pings the user.
+   - Verify before posting: `[ -r ~/.claude/.slack_xure_bot_token ]`. If missing, tell the user the bot token isn't set up and stop — don't silently fall back to a user-token connector (it won't notify).
+2. **Recipient = the user's Xure user_id** `U05MBLHE2J2` (`praveen.kumar`). `slack-bot-notify.sh` defaults to this; override with `SLACK_NOTIFY_USER`.
 3. **Remote Control active** — required for mobile push and the clickable reply URL. Skill auto-detects state per step 2; if off, falls back to Slack-only and surfaces the `⚠️` action block (step 6) every invocation.
    - The Claude mobile app is **assumed installed and signed in** to the same Anthropic account as the CLI; do not surface "install the app" hints.
    - `Push when Claude decides` should be enabled via `/config` for mobile push to actually fire (this is checked once: if the user reports never receiving mobile pushes despite RC being on, suggest checking `/config`).
@@ -67,7 +68,8 @@ Do not ask. Detect it programmatically every invocation. The harness writes a `s
    {"type":"system","subtype":"bridge_status","content":"/remote-control is active. Code in CLI or at https://claude.ai/code/session_01AgjnbPSQQ6m9RbuJx76R3P","url":"https://claude.ai/code/session_01AgjnbPSQQ6m9RbuJx76R3P",...}
    ```
    - If `content` contains `is active`, RC is ON. Use the `url` field for the deep link.
-   - If `content` indicates RC has been turned off, or there's no `bridge_status` event at all, RC is OFF.
+   - If `content` indicates RC has been turned off, RC is OFF.
+   - **Caveat (seen on Claude Code 2.1.168, 2026-06-07):** some builds write **no** `bridge_status` event into the JSONL even when RC is on, so "no event found" does **not** prove RC is off — and the real deep-link URL is then unrecoverable from the log (the only `session_01…` string present is the *example* in this very skill file — never paste that). If you find no event, don't assert RC is off; treat RC as *unknown*, omit the URL line, still frame the mobile-push moment (it fires from RC regardless), and skip the loud `⚠️` block unless the user has told you RC is off.
 
 4. Branch:
    - **RC ON** → use the URL in the Slack message and let the mobile-push framing fire. Skip the `⚠️` action block.
@@ -79,13 +81,24 @@ The same URL (`https://claude.ai/code/session_<id>`) works as both:
 
 So one URL is enough. No separate `claude://` scheme needed.
 
-### 3. Post via the Slack MCP tool
+### 3. Post via the bot helper script
 
-Call `mcp__slack__conversations_add_message`:
+Call the helper next to this skill — it DMs the user **as the @Claude MCP bot** (the only identity that push-notifies them):
 
-- `channel_id`: the user's self-DM with the bot. Format `@<bot_username>` works, e.g. `@claude_mcp_praveen`. If you don't know the bot username, ask the user once and remember it.
-- `text`: the composed message + URL/note, formatted as below.
-- `content_type`: `text/markdown`.
+```bash
+~/.claude/skills/slack-notify/slack-bot-notify.sh "$(cat <<'EOF'
+🔔 <notification text>
+
+<remote-control-url-if-RC-on>
+
+<branch> | <last-3-dirs>
+EOF
+)"
+```
+
+- It reads the `xoxb` token from `~/.claude/.slack_xure_bot_token`, opens the IM with `U05MBLHE2J2`, and posts. On success it prints `OK ts=… channel=…`; on failure `ERROR: …` (surface that to the user).
+- The message uses **Slack mrkdwn**, not full markdown: `*bold*`, `_italic_`, `` `code` ``, `>quote`. (Note: `*single asterisks*` for bold, not `**double**`.)
+- Do **not** use a `mcp__slack__*` tool or the claude.ai Slack connector here — they post as the user and won't notify. If the token file is missing, say so and stop.
 
 ### 4. Message format
 
@@ -96,7 +109,7 @@ With remote control on (URL detected from JSONL):
 
 <remote-control-url>
 
-<branch> | <last-3-dirs> | <plan>
+<branch> | <last-3-dirs>
 ```
 
 Without remote control:
@@ -104,20 +117,19 @@ Without remote control:
 ```
 🔔 <notification text>
 
-<branch> | <last-3-dirs> | <plan>
+<branch> | <last-3-dirs>
 
 _(local session — reply by returning to the terminal)_
 ```
 
 **Critical for the URL line:** put the URL on its own line, with NO trailing characters and a blank line after. Do not append parenthetical helper text on the next line — Slack's link parser greedily extends URLs into adjacent characters and the resulting deep-link breaks ("untitled session, loading messages" stuck). Don't use markdown link syntax `[label](url)` either; the bare URL is the most reliable shape across Slack desktop, Slack mobile, and the iOS/Android Claude app universal-link handoff.
 
-**Status trailer (the third line):** mirrors the user's terminal status line. Three fields, pipe-separated, pulled from the same sources as `statusline-command.sh`:
+**Status trailer (the last line):** mirrors the user's terminal status line. Two fields, pipe-separated:
 
 - **`<branch>`** — `git --no-optional-locks branch --show-current` run from the session's cwd. Falls back to `no-branch` if not inside a repo.
 - **`<last-3-dirs>`** — last 3 path components of cwd, slash-joined (e.g. `Code/Learning/awesome-claude-skills`).
-- **`<plan>`** — output of `python C:\Users\Praveen\.claude\claude_usage.py` (Windows) or whatever path the user's `claude_usage.py` is at on other OSes. Format is typically `plan: 86% | resets in 1h 11m`. If the script fails or is missing, fall back to `plan: ?`.
 
-The context-window field is intentionally omitted from Slack — it's only meaningful in the live terminal where the harness injects token counts. Don't fake it.
+The **`plan`** field was dropped (2026-06-07, at the user's request). On this Mac the live `5h%/7d%` numbers exist only in the statusline command's stdin (`rate_limits`, fed by the harness) — a background tool can't read them and they aren't cached on disk, so the field always came out `plan: ?`. Don't reintroduce it or fake it. The context-window field is likewise omitted — only meaningful in the live terminal.
 
 Use 🔔 as the lead emoji to make notifications visually distinct from other Slack messages. If the message is good news (tests passed, deploy succeeded), swap to ✅. If it's blocking (waiting on the user, error needing decision), use ⚠️.
 
@@ -140,7 +152,7 @@ If Remote Control is off, mobile push cannot fire — Anthropic's push system re
 
 Output one short line per channel that fired:
 
-- `✓ Slack: posted to @<bot>`
+- `✓ Slack: DM'd as @Claude MCP bot (ts <ts>)` — using the `ts` the helper printed
 - `✓ Mobile push: triggered (Remote Control active)` *or* `– Mobile push: skipped (no Remote Control)`
 
 **If Remote Control is OFF for this session**, append the following block to your terminal output — **every invocation, not throttled, not buried as a tip**. The user explicitly wants to be told, plainly, each time, that one toggle would unlock the second channel:
@@ -161,8 +173,8 @@ The choice of three is intentional: option 1 is for *right now*, option 2 is the
 
 ## Edge cases
 
-- **Multiple Slack workspaces.** If the user has more than one Slack MCP server connected (rare), ask which workspace before posting.
-- **User asks for a channel post instead of DM.** Default is DM (push to *you*). If the user explicitly says "post in #channel", honor it — but warn that the bot needs to be `/invite`d to that channel first, or the post will fail with `not_in_channel`.
+- **Why not the user's own Slack connectors.** The user also has a `claude.ai Slack` connector on the `crackle-world` workspace and may reconnect others — they all authenticate AS the user and so can't push-notify him. Always go through the **Xure bot** (`slack-bot-notify.sh`), regardless of what other Slack tools are connected.
+- **User asks for a channel post instead of DM.** Default is the DM. If the user explicitly says "post in #channel", pass that channel ID via `SLACK_NOTIFY_USER` is not right — instead call `chat.postMessage` with the channel ID directly using the same token; but the `@Claude MCP` bot must be `/invite`d to that channel first, or it fails with `not_in_channel`.
 - **URL changes mid-session.** If the user toggles `/remote-control` again or the URL rotates, the JSONL gets a fresh `bridge_status` event. Always read the *most recent* one — never cache the URL across invocations.
 - **Notification spam risk.** This skill is invoked explicitly. Don't post unsolicited Slack messages just because Claude finished a turn — that's the job of mobile push or hooks, not this skill.
 
