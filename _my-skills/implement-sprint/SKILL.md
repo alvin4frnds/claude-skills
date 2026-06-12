@@ -1,6 +1,6 @@
 ---
 name: implement-sprint
-description: Autonomously implement an entire sprint's task packets one-by-one via isolated git-worktree agents, merging each green packet to master. Invoke via `/implement-sprint` (optionally `/implement-sprint 15` to pin a sprint). Picks the latest `docs/todos/sprint N/` by default, walks every `claude-task--NNN--*.md` in order, SKIPS any packet already marked Done without re-verifying, and for the rest spawns one worktree agent that verifies-if-already-done → implements → drives the full toolchain + every BE/FE/CHROME manual-QA case green → flips Status to Done. The orchestrator then merges that worktree to master and moves on. Never pushes (operator reserves pushes); never touches foreign worktrees/changes from parallel agents.
+description: Autonomously implement an entire sprint's task packets one-by-one via isolated git-worktree agents, merging each green packet back to the branch HEAD is on (`dev` or `master`, not always `master`). Invoke via `/implement-sprint` (optionally `/implement-sprint 15` to pin a sprint). Picks the latest `docs/todos/sprint N/` by default, walks every `claude-task--NNN--*.md` in order, SKIPS any packet already marked Done without re-verifying, and for the rest spawns one worktree agent that verifies-if-already-done → implements → drives the full toolchain + every BE/FE/CHROME manual-QA case green → flips Status to Done. The orchestrator then merges that worktree back to the integration branch and moves on; if HEAD is on neither `dev` nor `master`, it stops and tells the operator. Never pushes (operator reserves pushes); never touches foreign worktrees/changes from parallel agents.
 ---
 
 # implement-sprint — autonomous per-packet sprint executor
@@ -9,8 +9,9 @@ You are the **orchestrator** for shipping a whole sprint. You do not write the
 feature code yourself — you enumerate the sprint's packets, decide per packet
 whether work is even needed, dispatch one **isolated git-worktree agent** per
 packet that does the implementation + the entire QA gate, then **merge each
-green packet into `master`** before moving to the next. One packet at a time,
-in numeric order.
+green packet into the integration branch** — the branch HEAD is on, `dev` or
+`master`, **not always `master`** (§1a) — before moving to the next. One packet
+at a time, in numeric order.
 
 This skill exists because the repo has a hard **Stop hook**
 (`.claude/hooks/qa-test-gate.sh`) that blocks stopping while any of the
@@ -30,15 +31,17 @@ gate is the agent's responsibility — not the operator's, not a follow-up.
 ## 0. Operating rules (read these first — they override convenience)
 
 - **Never `git push`.** The operator reserves all pushes (memory:
-  `never-push`). You commit and merge to local `master` only, and report SHAs.
+  `never-push`). You commit and merge to the local **integration branch** (the
+  `dev` or `master` branch HEAD is on — §1a) only, and report SHAs.
 - **Never touch foreign work.** Other Claude sessions run parallel worktree
   agents (`.claude/worktrees/agent-*`, often `locked`). Do not read, rebase,
   merge, or `git worktree remove` any worktree you didn't create. When merging,
-  only your packet's own files move. If `git status` on `master` shows changes
-  you didn't make, leave them — they belong to another agent or the operator.
+  only your packet's own files move. If `git status` on the integration branch
+  shows changes you didn't make, leave them — they belong to another agent or
+  the operator.
 - **One packet at a time, numeric order.** `001`, then `002`, … Do not
   parallelise packets — later packets in a sprint often build on earlier ones,
-  and serialising keeps the merge to `master` clean.
+  and serialising keeps the merge to the integration branch clean.
 - **Skip Done packets with zero verification.** If a packet's `**Status:**` line
   reads `Done` / `Complete` / `Shipped` / `Merged`, log it and move on. Do not
   re-open, re-verify, or re-run its tests. (This is the operator's explicit
@@ -53,7 +56,35 @@ gate is the agent's responsibility — not the operator's, not a follow-up.
 
 ---
 
-## 1. Resolve the sprint and enumerate packets
+## 1. Resolve the integration branch, the sprint, and enumerate packets
+
+### 1a. Resolve the integration branch (do this FIRST, before any dispatch)
+
+Every green packet merges back into **whatever branch HEAD is on** — `dev` or
+`master`, **not always `master`**. Capture it once and thread it through the
+whole run (the agents' rebase base, the merge target, the post-merge gate, and
+close-out):
+
+```bash
+BASE_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+echo "integration branch = $BASE_BRANCH"
+```
+
+- `BASE_BRANCH` is `dev` or `master` → that **is** the integration branch. Stay
+  checked out on it for the entire run; every `git merge --no-ff <agent-branch>`
+  (§2c) lands here, and every agent rebases onto it (§2b STEP 1).
+- `BASE_BRANCH` is **anything else** — a feature branch, or detached `HEAD`
+  (the command prints `HEAD`) → **STOP. Do not enumerate, do not dispatch any
+  agent.** Tell the operator verbatim:
+  > implement-sprint expects HEAD on `dev` or `master` so it knows where to
+  > merge each green packet — but HEAD is on `<BASE_BRANCH>`. Check out the
+  > branch you want this sprint merged into (`git checkout dev` or
+  > `git checkout master`), then re-run `/implement-sprint`.
+
+  This is a hard gate: silently picking a branch would land a sprint's worth of
+  commits in the wrong place.
+
+### 1b. Resolve the sprint and enumerate packets
 
 ```bash
 # Pin via arg ("/implement-sprint 15") or default to the highest-numbered sprint.
@@ -92,10 +123,15 @@ Spawn **one** agent with `isolation: "worktree"` and the model from 2a. The
 agent prompt MUST contain the literal packet path and these instructions
 (adapt only the packet-specific bits):
 
-> **STEP 1 — rebase onto master.** You are in a fresh worktree that may lag
-> `master` (memory: `worktree-stale-base`). Run `git fetch` is unnecessary
-> (local), but `git rebase master` (or `git merge master`) onto current local
-> `master` as your very first action, before reading or editing anything.
+> **STEP 1 — rebase onto the integration branch (`<BASE_BRANCH>`).** You are in
+> a fresh worktree that may lag the integration branch (memory:
+> `worktree-stale-base`) — the orchestrator substitutes the literal branch name
+> (`dev` or `master`) for `<BASE_BRANCH>` below. `git fetch` is unnecessary
+> (local), but run `git rebase <BASE_BRANCH>` (or `git merge <BASE_BRANCH>`)
+> onto the current local `<BASE_BRANCH>` as your very first action, before
+> reading or editing anything. Do **not** assume `master` — earlier packets in
+> this sprint were merged into `<BASE_BRANCH>`, so that is the only base that
+> carries their work.
 >
 > **STEP 2 — read the contract.** Read `CLAUDE.md`, `docs/CONVENTIONS.md`
 > end-to-end (HARD gate, Part 1 workflow + Part 2 conventions + Part 4 page
@@ -178,7 +214,7 @@ agent prompt MUST contain the literal packet path and these instructions
 > matrix final state. If you hit a genuine blocker you cannot clear, report it
 > precisely and stop — do not fake a Pass.
 
-### 2c. Merge the green packet to master (orchestrator does this)
+### 2c. Merge the green packet to the integration branch (orchestrator does this)
 When the agent returns success:
 1. **Manager QA audit (do NOT just trust the agent's report).** Re-read the
    packet's `§12b` matrix **on disk** on the agent's branch and reject the
@@ -198,18 +234,34 @@ When the agent returns success:
    (e.g. `Failed — FB (#3)`) does NOT block the audit — but it means the
    feature is not shippable: do not merge; surface it to the operator.
    Then spot-check the diff touches only this packet's files + its packet `.md`.
-2. Merge the agent's worktree branch into local `master`:
+2. Merge the agent's worktree branch into the local **integration branch**
+   (`$BASE_BRANCH` from §1a — `dev` or `master`). First confirm you're still on
+   it (`git rev-parse --abbrev-ref HEAD` → `$BASE_BRANCH`), then:
    ```bash
    git merge --no-ff <agent-branch> -m "merge(sprint N): NNN <slug>"
    ```
-   Resolve conflicts in favour of keeping **both** your packet and any foreign
-   changes already on `master` — never clobber another agent's work.
-3. Re-run the fast gate on `master` to catch merge drift
+   `git merge` lands the branch into whatever is checked out, so staying on
+   `$BASE_BRANCH` is what makes this `dev`-aware — never `git checkout master`
+   first. Resolve conflicts in favour of keeping **both** your packet and any
+   foreign changes already on `$BASE_BRANCH` — never clobber another agent's work.
+3. Re-run the fast gate on `$BASE_BRANCH` to catch merge drift
    (`./vendor/bin/pest --filter <packet surface>` + `npm run build`). The
    classic merge-time biters (memory `parallel-agent-lessons`): `phpstan.neon`,
    `AppServiceProvider`, `bootstrap.php`, `User.php`, `deptrac.yaml`,
    driver match-arms — eyeball these if the packet touched them.
-4. Report the master SHA. Move to the next packet.
+4. **Clean up the merged worktree (mandatory).** Once the packet's commits are
+   on `$BASE_BRANCH` and the fast gate passed, remove the agent's worktree and branch
+   — stale worktrees carry full `vendor/` + `node_modules/` copies (~0.5 GB
+   each) and once bloated `make dev-sync` into a ~278k-file rsync that looked
+   hung:
+   ```bash
+   git worktree remove .claude/worktrees/<agent-worktree>   # --force if needed; it's merged
+   git branch -d <agent-branch>
+   git worktree prune
+   ```
+   Only ever remove worktrees/branches **you** created this session — foreign
+   `agent-*` worktrees belong to parallel sessions (rule §0).
+5. Report the `$BASE_BRANCH` SHA. Move to the next packet.
 
 > If `isolation:"worktree"` agents can't merge cleanly because the harness
 > auto-cleans the worktree, instead have the agent leave its branch in place
@@ -223,11 +275,16 @@ When the agent returns success:
 
 After the last packet:
 - Print a sprint summary table: packet → ALREADY-DONE / IMPLEMENTED / BLOCKED,
-  master SHA, gate state.
+  `$BASE_BRANCH` SHA, gate state. Name the integration branch in the header so
+  it's unambiguous which branch the sprint landed on.
+- Sweep your own leftovers: every worktree/branch you created this session must
+  be gone (`git worktree list` + `git branch --list 'worktree-agent-*'` show
+  none of yours). Leave foreign ones alone.
 - Update `_state.md` / sprint index if the sprint uses one.
 - **Slack the operator once** (memory `slack-notify` → Xure `mcp__slack__`, DM
-  `U05MBLHE2J2`, NOT `claude_ai_Slack`): sprint name, N done / N skipped / N
-  blocked, head SHA, and that nothing was pushed.
+  `U05MBLHE2J2`, NOT `claude_ai_Slack`): sprint name, the integration branch
+  (`$BASE_BRANCH`), N done / N skipped / N blocked, head SHA, and that nothing
+  was pushed.
 - Remind: nothing was pushed; pushes are the operator's.
 
 ---
