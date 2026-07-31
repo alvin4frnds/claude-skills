@@ -24,6 +24,39 @@ tok=$(cat "$TOKEN_FILE")
 if [ "$#" -ge 1 ]; then msg="$1"; else msg=$(cat); fi
 [ -n "$msg" ] || { echo "ERROR: empty message" >&2; exit 1; }
 
+# --- Desktop widget side-channel -------------------------------------------
+# Also publish to ntfy so the native "Claude Reminders" desktop widget updates.
+# Best-effort: wrapped so it can NEVER fail the Slack notification below. Slack
+# remains the phone-push path; ntfy only drives the widget.
+NTFY_CFG="${NTFY_CONFIG_FILE:-$HOME/.claude/slack-ping-tray/ntfy.json}"
+if [ -r "$NTFY_CFG" ]; then
+  MSG="$msg" CFG="$NTFY_CFG" python3 - >/dev/null 2>&1 <<'PY' || true
+import os, json, re, time, urllib.request
+try:
+    cfg = json.load(open(os.environ["CFG"]))
+    base, topic, token = cfg["base_url"].rstrip("/"), cfg["topic"], cfg["token"]
+    msg = os.environ["MSG"]
+    lines = [l for l in msg.splitlines() if l.strip()]
+    text = lines[0] if lines else msg
+    low = text.lower()
+    action = text.lstrip().startswith(("⚠", "🚨", "❌", "🔴", "🔔")) or \
+             any(k in low for k in ("needs your input", "needs input", "waiting for", "question"))
+    payload = {"type": "action" if action else "fyi", "text": text, "ts": int(time.time())}
+    m = re.search(r"https://claude\.ai/code/\S+", msg)
+    if m:
+        payload["session_url"] = m.group(0)
+    req = urllib.request.Request(
+        f"{base}/{topic}",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "text/plain; charset=utf-8"},
+    )
+    urllib.request.urlopen(req, timeout=6).read()
+except Exception:
+    pass
+PY
+fi
+# ---------------------------------------------------------------------------
+
 # Open (or fetch) the IM channel with the recipient.
 chan=$(curl -s -H "Authorization: Bearer $tok" -H "Content-type: application/json" \
   -d "{\"users\":\"$RECIPIENT\"}" https://slack.com/api/conversations.open \
